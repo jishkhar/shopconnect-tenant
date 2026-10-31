@@ -27,6 +27,7 @@ import {
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Field } from "@/components/ui/Field";
 import { Input } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
@@ -132,6 +133,7 @@ export function CustomerProfile({
   const [composing, setComposing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [adjusting, setAdjusting] = useState(false);
+  const [blocking, setBlocking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [tagText, setTagText] = useState("");
   const [form, setForm] = useState({
@@ -177,6 +179,27 @@ export function CustomerProfile({
       optIn: c.whatsapp_opt_in,
     });
     setEditing(true);
+  }
+
+  /** Block (or unblock) the customer: a blocked customer can't sign in to the website, order there or on WhatsApp, or get messages. */
+  async function toggleBlock() {
+    if (!c) return;
+    setBusy(true);
+    const blocked = c.status === "blocked";
+    const res = await erp(`/api/v1/customers/${customerId}`, "PATCH", {
+      status: blocked ? "active" : "blocked",
+    });
+    setBusy(false);
+    setBlocking(false);
+    if (res.error)
+      return toast.error(
+        blocked
+          ? "Couldn't unblock the customer"
+          : "Couldn't block the customer",
+        res.error,
+      );
+    toast.success(blocked ? "Customer unblocked" : "Customer blocked");
+    changed();
   }
 
   async function saveEdit() {
@@ -296,10 +319,37 @@ export function CustomerProfile({
               <Button variant="ghost" onClick={openEdit}>
                 Edit
               </Button>
+              <Button variant="ghost" onClick={() => setBlocking(true)}>
+                {c.status === "blocked" ? "Unblock" : "Block"}
+              </Button>
             </>
           )}
         </div>
       </div>
+      {c.status === "blocked" && (
+        <p className="mb-space-3 rounded-md bg-error-tint px-space-3 py-space-2 text-[13px] text-ink-900">
+          This customer is blocked: they can&apos;t sign in to the website,
+          place orders there or on WhatsApp, or receive messages and campaigns.
+        </p>
+      )}
+      <ConfirmDialog
+        open={blocking}
+        title={
+          c.status === "blocked"
+            ? "Unblock this customer?"
+            : "Block this customer?"
+        }
+        message={
+          c.status === "blocked"
+            ? `${c.name || "This customer"} will be able to sign in, order on the website and WhatsApp, and get messages again.`
+            : `${c.name || "This customer"} won't be able to sign in to the website, place orders there or on WhatsApp, or receive messages and campaigns. Their order history stays.`
+        }
+        confirmLabel={c.status === "blocked" ? "Unblock" : "Block"}
+        destructive={c.status !== "blocked"}
+        busy={busy}
+        onConfirm={toggleBlock}
+        onCancel={() => setBlocking(false)}
+      />
 
       <Tabs tabs={TABS} value={tab} onChange={setTab} className="!mb-space-3" />
 
