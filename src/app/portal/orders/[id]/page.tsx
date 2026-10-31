@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Ban,
   CreditCard,
+  FileText,
   ImageIcon,
   PackageCheck,
   Undo2,
@@ -40,6 +41,7 @@ import {
 } from "@/hooks/useOrders";
 import { useOrderReturns } from "@/hooks/useReturns";
 import {
+  erpBlob,
   formatDateTime,
   formatMoney,
   humanize,
@@ -248,6 +250,17 @@ export default function OrderDetailPage() {
                     <Undo2 size={16} /> Return / exchange
                   </Button>
                 )}
+              {o.status !== "pending" && o.status !== "cancelled" && (
+                <Button
+                  variant="secondary"
+                  onClick={() => openOrderPdf(o.id, o.order_number)}
+                >
+                  <FileText size={16} />{" "}
+                  {o.status === "completed"
+                    ? "Tax invoice"
+                    : "Order confirmation"}
+                </Button>
+              )}
               {canCancel && canCancelNow && (
                 <Button
                   variant="destructive"
@@ -628,4 +641,25 @@ export default function OrderDetailPage() {
       )}
     </PortalShell>
   );
+}
+
+/** The order's PDF in a new tab: its GST tax invoice once delivered, the order confirmation before (the same file the customer gets on
+ * WhatsApp). Downloads instead where the browser can't show PDFs. */
+async function openOrderPdf(orderId: string, orderNumber: string) {
+  const tab = window.open("", "_blank"); // opened before the request, so the popup isn't blocked
+  const res = await erpBlob(`/api/v1/orders/${orderId}/pdf`);
+  if (!res.data) {
+    tab?.close();
+    toast.error("Couldn't open the PDF", res.error ?? undefined);
+    return;
+  }
+  const url = URL.createObjectURL(res.data);
+  if (tab) tab.location.href = url;
+  else {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${orderNumber}.pdf`;
+    a.click();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
