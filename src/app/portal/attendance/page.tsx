@@ -31,10 +31,12 @@ import { DAY_STATE, fmtDate, fmtMinutes } from "@/lib/hr";
 import { usePermission, useStaffSession } from "@/lib/staffAuth";
 import { useMyMonthlyAttendance } from "@/hooks/useHr";
 import { SkeletonLines } from "@/components/ui/Skeleton";
+import { neutralise } from "@/lib/csvSafe";
 
 // CSV cells are escaped inline here -- not extracted to a shared
 // helper since that page keeps its own local copy too.
-function csvCell(value: string): string {
+function csvCell(raw: string): string {
+  const value = neutralise(raw);
   return /[,"\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 

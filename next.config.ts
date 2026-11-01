@@ -12,7 +12,26 @@ if (process.env.VERCEL && !process.env.NEXT_PUBLIC_API_BASE_URL) {
   );
 }
 
+// Browser security headers on every page (security review SEC-07). frame-ancestors 'none' stops other sites framing this app
+// (clickjacking); nosniff, HSTS and the referrer policy are the usual baseline. No script-src yet: a nonce-based CSP is the next step.
+const securityHeaders = [
+  {
+    key: "Content-Security-Policy",
+    value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+  },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  {
+    key: "Strict-Transport-Security",
+    value: "max-age=63072000; includeSubDomains",
+  },
+];
+
 const nextConfig: NextConfig = {
+  async headers() {
+    return [{ source: "/:path*", headers: securityHeaders }];
+  },
   // Self-hosted Docker deployment ONLY (frontend/Dockerfile): traces only
   // the files each page actually needs into .next/standalone, so the
   // runtime image doesn't need to ship node_modules at all.

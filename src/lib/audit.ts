@@ -1,3 +1,4 @@
+import { neutralise } from "@/lib/csvSafe";
 import { humanize } from "@/lib/erp";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -79,7 +80,7 @@ export type AuditEntry = {
   changes: AuditChange[];
 };
 
-const cell = (v: string) => `"${v.replace(/"/g, '""')}"`;
+const cell = (v: string) => `"${neutralise(v).replace(/"/g, '""')}"`;
 /** CSV of the rows as shown (one line per entry, changes joined with "; "), ready to download. */
 export function auditCsv(rows: AuditEntry[]): string {
   const head = [

@@ -11,6 +11,7 @@ import { useGstRegistrations } from "@/hooks/useTaxes";
 import { formatMoney, monthRange } from "@/lib/erp";
 import { CardSkeleton } from "@/components/ui/Skeleton";
 import { Help } from "@/components/erp/finance/Help";
+import { neutralise } from "@/lib/csvSafe";
 
 type Rate = {
   rate_bps: number;
@@ -76,7 +77,7 @@ function csvDownload(
   rows: (string | number)[][],
 ) {
   const cell = (v: string | number) => {
-    const s = String(v);
+    const s = typeof v === "number" ? String(v) : neutralise(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const text = [header, ...rows].map((r) => r.map(cell).join(",")).join("\n");
