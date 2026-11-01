@@ -8,7 +8,6 @@ import {
   GiftIcon,
   MoreHorizontalIcon,
   Notification01Icon,
-  RefreshIcon,
   Search01Icon,
   Settings02Icon,
   UserIcon,
@@ -24,6 +23,7 @@ import {
   TierCrown,
   ViewHeader,
 } from "@/components/crm/membership/parts";
+import { RuleModal } from "@/components/crm/rules/RuleModal";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -42,75 +42,48 @@ import { Tabs } from "@/components/ui/Tabs";
 import { type CrmSettings } from "@/lib/crm";
 import { erp, formatMoney, fromMinor, toMinor, useErpQuery } from "@/lib/erp";
 import {
-  FREQUENCY_LABEL,
   TIER_LABEL,
-  type Frequency,
   type HistoryEntry,
   type Overview,
-  type Rule,
-  type RuleKind,
+  type QualificationRule,
   type RulesResponse,
 } from "@/lib/membership";
+import {
+  FREQUENCY_LABEL,
+  describeAction,
+  describeConditions,
+  type CrmRule,
+  type RuleRun,
+} from "@/lib/rules";
 import { toast } from "@/lib/toast";
 
-type SubTab = "qualification" | "renewal" | "notification" | "history";
+type SubTab = "qualification" | "automations" | "history";
 const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: "qualification", label: "Qualification Rules" },
-  { key: "renewal", label: "Renewal Rules" },
-  { key: "notification", label: "Notifications" },
+  { key: "automations", label: "Automations" },
   { key: "history", label: "History" },
 ];
-const APPLIES = [
-  "All members",
-  "Regular members",
-  "Silver members",
-  "Gold members",
-  "Platinum members",
-];
+const TIER_KEYS = ["silver", "gold", "platinum"] as const;
 
-type Form = {
-  kind: Exclude<RuleKind, "qualification">;
-  name: string;
-  applies: string;
-  trigger: string;
-  action: string;
-  frequency: Frequency;
-  status: Rule["status"];
-};
-const EMPTY: Form = {
-  kind: "renewal",
-  name: "",
-  applies: "All members",
-  trigger: "",
-  action: "",
-  frequency: "daily",
-  status: "active",
-};
-
-function ruleIcon(r: Rule) {
-  if (r.system) {
-    const tier = r.id.replace("system:", "");
-    if (tier === "silver" || tier === "gold" || tier === "platinum")
-      return <TierCrown tier={tier} size={32} />;
-    return (
-      <span className="flex h-8 w-8 items-center justify-center rounded-full bg-success-tint text-success">
-        <HugeiconsIcon
-          icon={tier === "inactive" ? Briefcase01Icon : UserIcon}
-          size={16}
-        />
-      </span>
-    );
-  }
+function qualIcon(r: QualificationRule) {
+  const key = r.id.replace("system:", "");
+  if (key === "silver" || key === "gold" || key === "platinum")
+    return <TierCrown tier={key} size={32} />;
   return (
-    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-50 text-brand-700">
+    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-success-tint text-success">
       <HugeiconsIcon
-        icon={r.kind === "notification" ? Notification01Icon : RefreshIcon}
+        icon={key === "inactive" ? Briefcase01Icon : UserIcon}
         size={16}
       />
     </span>
   );
 }
 
+const pillFor = (status: CrmRule["status"]) =>
+  status === "active" ? "active" : status === "draft" ? "draft" : "paused";
+
+/** Membership > Rules: how tiers are earned (points, plus optional minimum spend and orders), automations that really run (points,
+ * follow-ups), and the history of changes. */
 export function RulesView({
   currency,
   canConfigure,
@@ -124,27 +97,27 @@ export function RulesView({
   const plans = useErpQuery<Overview>("/api/v1/crm/membership/overview");
   const [sub, setSub] = useState<SubTab>("qualification");
   const [search, setSearch] = useState("");
-  const [tier, setTier] = useState("");
   const [status, setStatus] = useState("");
-  const [editing, setEditing] = useState<Rule | "new" | null>(null);
-  const [form, setForm] = useState<Form>(EMPTY);
-  const [value, setValue] = useState("");
-  const [removing, setRemoving] = useState<Rule | null>(null);
+  const [editingQual, setEditingQual] = useState<QualificationRule | null>(
+    null,
+  );
+  const [qual, setQual] = useState({ value: "", spend: "", orders: "" });
+  const [automation, setAutomation] = useState<CrmRule | "new" | null>(null);
+  const [removing, setRemoving] = useState<CrmRule | null>(null);
   const [busy, setBusy] = useState(false);
   const history = useErpQuery<HistoryEntry[]>(
     sub === "history" ? "/api/v1/crm/membership/history" : null,
   );
   const k = data.data?.kpis;
-  const list = sub === "history" ? [] : (data.data?.[sub] ?? []);
-  const rows = list.filter(
+  const term = search.trim().toLowerCase();
+  const qualRows = (data.data?.qualification ?? []).filter((r) =>
+    `${r.name} ${r.trigger_text} ${r.action_text}`.toLowerCase().includes(term),
+  );
+  const autoRows = (data.data?.automations ?? []).filter(
     (r) =>
-      `${r.name} ${r.trigger_text} ${r.action_text}`
+      `${r.name} ${describeConditions(r.conditions, r.match)} ${describeAction(r.action)}`
         .toLowerCase()
-        .includes(search.trim().toLowerCase()) &&
-      (!tier ||
-        r.applies_to.toLowerCase().includes(tier) ||
-        r.applies_to === "All members" ||
-        r.applies_to === "All customers") &&
+        .includes(term) &&
       (!status || r.status === status),
   );
 
@@ -154,66 +127,56 @@ export function RulesView({
     onChanged();
   };
 
-  function openEdit(r: Rule | "new") {
-    if (r !== "new" && r.system) setValue(String(r.value ?? ""));
-    else
-      setForm(
-        r === "new"
-          ? {
-              ...EMPTY,
-              kind: sub === "notification" ? "notification" : "renewal",
-            }
-          : {
-              kind: r.kind as Form["kind"],
-              name: r.name,
-              applies: r.applies_to,
-              trigger: r.trigger_text,
-              action: r.action_text,
-              frequency: r.frequency,
-              status: r.status,
-            },
-      );
-    setEditing(r);
+  function openQual(r: QualificationRule) {
+    setQual({
+      value: String(r.value ?? ""),
+      spend: r.min_spend_minor ? fromMinor(r.min_spend_minor) : "",
+      orders: r.min_orders ? String(r.min_orders) : "",
+    });
+    setEditingQual(r);
   }
 
-  async function save() {
-    if (!editing) return;
-    setBusy(true);
-    let res;
-    if (editing !== "new" && editing.system) {
-      const n = Number(value);
-      if (!Number.isInteger(n) || n < 0) {
-        setBusy(false);
-        return toast.error("Check the value", "Enter a whole number.");
-      }
-      res = await erp(
-        `/api/v1/crm/membership/rules/system/${editing.id.replace("system:", "")}`,
-        "PUT",
-        { value: n },
-      );
-    } else {
-      const body = {
-        kind: form.kind,
-        name: form.name.trim(),
-        applies_to: form.applies,
-        trigger_text: form.trigger.trim(),
-        action_text: form.action.trim(),
-        frequency: form.frequency,
-        status: form.status,
-      };
-      res =
-        editing === "new"
-          ? await erp("/api/v1/crm/membership/rules", "POST", body)
-          : await erp(
-              `/api/v1/crm/membership/rules/${editing.id}`,
-              "PUT",
-              body,
-            );
+  async function saveQual() {
+    if (!editingQual) return;
+    const key = editingQual.id.replace("system:", "");
+    const value = Number(qual.value);
+    if (!Number.isInteger(value) || value < 0 || qual.value.trim() === "")
+      return toast.error("Check the value", "Enter a whole number.");
+    const body: Record<string, number> = { value };
+    if ((TIER_KEYS as readonly string[]).includes(key)) {
+      const spend = qual.spend.trim() ? toMinor(qual.spend) : 0;
+      if (spend === null || spend < 0)
+        return toast.error(
+          "Check the spend",
+          "Enter an amount, or leave it empty.",
+        );
+      body.min_spend_minor = spend;
+      body.min_orders = qual.orders.trim() ? Number(qual.orders) : 0;
     }
+    setBusy(true);
+    const res = await erp(
+      `/api/v1/crm/membership/rules/system/${key}`,
+      "PUT",
+      body,
+    );
     setBusy(false);
     if (res.error) return toast.error("Couldn't save the rule", res.error);
     toast.success("Rule saved");
-    setEditing(null);
+    setEditingQual(null);
+    reload();
+  }
+
+  async function runNow(r: CrmRule) {
+    const res = await erp<RuleRun>(
+      `/api/v1/crm/rules/membership/${r.id}/run`,
+      "POST",
+    );
+    if (res.error || !res.data)
+      return toast.error("Couldn't run the automation", res.error ?? undefined);
+    toast.success(
+      "Automation ran",
+      `${res.data.matched} matched · ${res.data.added} acted on`,
+    );
     reload();
   }
 
@@ -221,23 +184,27 @@ export function RulesView({
     if (!removing) return;
     setBusy(true);
     const res = await erp(
-      `/api/v1/crm/membership/rules/${removing.id}`,
+      `/api/v1/crm/rules/membership/${removing.id}`,
       "DELETE",
     );
     setBusy(false);
-    if (res.error) return toast.error("Couldn't delete the rule", res.error);
-    toast.success("Rule deleted");
+    if (res.error)
+      return toast.error("Couldn't delete the automation", res.error);
+    toast.success("Automation deleted");
     setRemoving(null);
     reload();
   }
 
-  const columns = useMemo<ColumnDef<Rule, unknown>[]>(
+  const menuClass =
+    "flex h-8 w-8 items-center justify-center rounded-md text-ink-600 hover:bg-black/[0.05] focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:outline-none";
+
+  const qualColumns = useMemo<ColumnDef<QualificationRule, unknown>[]>(
     () => [
       {
         header: "Rule name",
         cell: ({ row }) => (
           <span className="flex items-center gap-space-2">
-            {ruleIcon(row.original)}
+            {qualIcon(row.original)}
             <span className="font-semibold text-ink-900">
               {row.original.name}
             </span>
@@ -248,29 +215,108 @@ export function RulesView({
       {
         header: "Trigger / condition",
         cell: ({ row }) => (
-          <span className="block max-w-[260px] truncate whitespace-normal">
+          <span className="block max-w-[300px] whitespace-normal">
             {row.original.trigger_text}
           </span>
         ),
       },
       { header: "Action", cell: ({ row }) => row.original.action_text },
+      { header: "Frequency", cell: () => "Real-time" },
+      { header: "Status", cell: () => <StatusPill status="active" /> },
+      ...(canConfigure
+        ? [
+            {
+              id: "actions",
+              header: "Actions",
+              meta: { className: "!min-w-0" },
+              cell: ({ row }: { row: { original: QualificationRule } }) =>
+                row.original.field === null ? null : (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      aria-label={`Actions for ${row.original.name}`}
+                      className={menuClass}
+                    >
+                      <HugeiconsIcon icon={MoreHorizontalIcon} size={18} />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent>
+                      <DropdownMenuItem onClick={() => openQual(row.original)}>
+                        Edit
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ),
+            } as ColumnDef<QualificationRule, unknown>,
+          ]
+        : []),
+    ],
+    [canConfigure],
+  );
+
+  const autoColumns = useMemo<ColumnDef<CrmRule, unknown>[]>(
+    () => [
+      {
+        header: "Rule name",
+        cell: ({ row }) => (
+          <span className="flex items-center gap-space-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-50 text-brand-700">
+              <HugeiconsIcon
+                icon={
+                  row.original.action.type === "award_points"
+                    ? GiftIcon
+                    : Notification01Icon
+                }
+                size={16}
+              />
+            </span>
+            <span className="font-semibold text-ink-900">
+              {row.original.name}
+            </span>
+          </span>
+        ),
+      },
+      {
+        header: "Trigger / condition",
+        cell: ({ row }) => (
+          <span
+            className="block max-w-[280px] truncate"
+            title={describeConditions(
+              row.original.conditions,
+              row.original.match,
+            )}
+          >
+            {describeConditions(row.original.conditions, row.original.match)}
+          </span>
+        ),
+      },
+      {
+        header: "Action",
+        cell: ({ row }) => (
+          <span className="block max-w-[240px] truncate">
+            {describeAction(row.original.action)}
+          </span>
+        ),
+      },
       {
         header: "Frequency",
         cell: ({ row }) => FREQUENCY_LABEL[row.original.frequency],
       },
       {
+        header: "Last run",
+        cell: ({ row }) =>
+          row.original.last_run_at ? (
+            <span className="text-ink-600">
+              {new Date(row.original.last_run_at).toLocaleDateString("en-IN")}
+              <span className="block text-[12px]">
+                {row.original.matched_count.toLocaleString("en-IN")} matched
+              </span>
+            </span>
+          ) : (
+            <span className="text-ink-400">Not yet</span>
+          ),
+      },
+      {
         header: "Status",
-        cell: ({ row }) => (
-          <StatusPill
-            status={
-              row.original.status === "active"
-                ? "active"
-                : row.original.status === "draft"
-                  ? "draft"
-                  : "paused"
-            }
-          />
-        ),
+        cell: ({ row }) => <StatusPill status={pillFor(row.original.status)} />,
       },
       ...(canConfigure
         ? [
@@ -278,30 +324,32 @@ export function RulesView({
               id: "actions",
               header: "Actions",
               meta: { className: "!min-w-0" },
-              cell: ({ row }: { row: { original: Rule } }) =>
-                row.original.system && row.original.field === null ? null : (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger
-                      aria-label={`Actions for ${row.original.name}`}
-                      className="flex h-8 w-8 items-center justify-center rounded-md text-ink-600 hover:bg-black/[0.05] focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:outline-none"
+              cell: ({ row }: { row: { original: CrmRule } }) => (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    aria-label={`Actions for ${row.original.name}`}
+                    className={menuClass}
+                  >
+                    <HugeiconsIcon icon={MoreHorizontalIcon} size={18} />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent>
+                    <DropdownMenuItem
+                      onClick={() => setAutomation(row.original)}
                     >
-                      <HugeiconsIcon icon={MoreHorizontalIcon} size={18} />
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent>
-                      <DropdownMenuItem onClick={() => openEdit(row.original)}>
-                        Edit
+                      Edit
+                    </DropdownMenuItem>
+                    {row.original.status === "active" && (
+                      <DropdownMenuItem onClick={() => runNow(row.original)}>
+                        Run now
                       </DropdownMenuItem>
-                      {!row.original.system && (
-                        <DropdownMenuItem
-                          onClick={() => setRemoving(row.original)}
-                        >
-                          Delete
-                        </DropdownMenuItem>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ),
-            } as ColumnDef<Rule, unknown>,
+                    )}
+                    <DropdownMenuItem onClick={() => setRemoving(row.original)}>
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ),
+            } as ColumnDef<CrmRule, unknown>,
           ]
         : []),
     ],
@@ -309,8 +357,21 @@ export function RulesView({
     [canConfigure],
   );
 
-  const points = (key: string) =>
-    data.data?.qualification.find((r) => r.id === `system:${key}`)?.value;
+  const q = (key: string) =>
+    data.data?.qualification.find((r) => r.id === `system:${key}`);
+  const tierLines = (key: (typeof TIER_KEYS)[number], from: string) => {
+    const r = q(key);
+    return [
+      `Loyalty points ≥ ${r?.value?.toLocaleString("en-IN") ?? "—"}`,
+      ...(r?.min_spend_minor
+        ? [`Spend since joining ≥ ${formatMoney(r.min_spend_minor, currency)}`]
+        : []),
+      ...(r?.min_orders
+        ? [`At least ${r.min_orders.toLocaleString("en-IN")} orders`]
+        : []),
+      `Auto-upgrade from ${from}`,
+    ];
+  };
   const summary = [
     {
       tier: "regular" as const,
@@ -319,40 +380,28 @@ export function RulesView({
         "Auto-assigned when the profile is complete",
       ],
     },
-    {
-      tier: "silver" as const,
-      lines: [
-        `Loyalty points ≥ ${points("silver")?.toLocaleString("en-IN") ?? "—"}`,
-        "Auto-upgrade from Regular",
-      ],
-    },
-    {
-      tier: "gold" as const,
-      lines: [
-        `Loyalty points ≥ ${points("gold")?.toLocaleString("en-IN") ?? "—"}`,
-        "Auto-upgrade from Silver",
-      ],
-    },
-    {
-      tier: "platinum" as const,
-      lines: [
-        `Loyalty points ≥ ${points("platinum")?.toLocaleString("en-IN") ?? "—"}`,
-        "Auto-upgrade from Gold",
-      ],
-    },
+    { tier: "silver" as const, lines: tierLines("silver", "Regular") },
+    { tier: "gold" as const, lines: tierLines("gold", "Silver") },
+    { tier: "platinum" as const, lines: tierLines("platinum", "Gold") },
   ];
-
-  const editingSystem = editing !== null && editing !== "new" && editing.system;
+  const editingKey = editingQual?.id.replace("system:", "") ?? "";
+  const editingTier = (TIER_KEYS as readonly string[]).includes(editingKey);
 
   return (
     <div>
       <ViewHeader
         title="Membership Rules"
-        description="Configure qualification, upgrade, renewal and expiry rules for Regular, Silver, Gold and Platinum memberships."
+        description="How customers qualify for Regular, Silver, Gold and Platinum, and automations that reward or follow up with members."
         action={
           canConfigure && (
-            <Button onClick={() => openEdit("new")} className="shrink-0">
-              <HugeiconsIcon icon={Add01Icon} size={16} /> Add rule
+            <Button
+              onClick={() => {
+                setSub("automations");
+                setAutomation("new");
+              }}
+              className="shrink-0"
+            >
+              <HugeiconsIcon icon={Add01Icon} size={16} /> Add automation
             </Button>
           )
         }
@@ -369,9 +418,11 @@ export function RulesView({
           icon={<HugeiconsIcon icon={CheckmarkCircle02Icon} size={20} />}
         />
         <StatCard
-          label="Automated Upgrades"
-          value={k ? k.automated_upgrades : "—"}
-          hint="Regular → Platinum"
+          label="Automation Actions"
+          value={
+            k ? k.automation_events_this_month.toLocaleString("en-IN") : "—"
+          }
+          hint="points given / follow-ups this month"
           icon={<HugeiconsIcon icon={Settings02Icon} size={20} />}
         />
         <StatCard
@@ -405,30 +456,19 @@ export function RulesView({
               aria-label="Search rules"
             />
           </span>
-          <Select
-            value={tier}
-            onValueChange={setTier}
-            className="!w-auto"
-            aria-label="Tier"
-          >
-            <option value="">All tiers</option>
-            {(["regular", "silver", "gold", "platinum"] as const).map((t) => (
-              <option key={t} value={t}>
-                {TIER_LABEL[t]}
-              </option>
-            ))}
-          </Select>
-          <Select
-            value={status}
-            onValueChange={setStatus}
-            className="!w-auto"
-            aria-label="Status"
-          >
-            <option value="">All statuses</option>
-            <option value="active">Active</option>
-            <option value="draft">Draft</option>
-            <option value="paused">Paused</option>
-          </Select>
+          {sub === "automations" && (
+            <Select
+              value={status}
+              onValueChange={setStatus}
+              className="!w-auto"
+              aria-label="Status"
+            >
+              <option value="">All statuses</option>
+              <option value="active">Active</option>
+              <option value="draft">Draft</option>
+              <option value="paused">Paused</option>
+            </Select>
+          )}
         </Card>
       )}
       {data.error && (
@@ -444,32 +484,44 @@ export function RulesView({
             prefixes={["rule", "tier"]}
             loading={history.loading}
           />
+        ) : sub === "qualification" ? (
+          <>
+            <div className="whitespace-nowrap">
+              <DataTable
+                columns={qualColumns}
+                data={qualRows}
+                getRowId={(r) => r.id}
+                loading={data.loading}
+                paginate={false}
+                emptyMessage={
+                  data.loading ? "Loading rules…" : "No rules match."
+                }
+              />
+            </div>
+            <p className="px-space-3 py-space-3 text-[12px] text-ink-400">
+              Tiers are worked out live from these settings; editing one changes
+              every customer&apos;s tier at once.
+            </p>
+          </>
         ) : (
           <>
             <div className="whitespace-nowrap">
               <DataTable
-                columns={columns}
-                data={rows}
+                columns={autoColumns}
+                data={autoRows}
                 getRowId={(r) => r.id}
                 loading={data.loading}
                 paginate={false}
                 emptyMessage={
                   data.loading
-                    ? "Loading rules…"
-                    : sub === "qualification"
-                      ? "No rules match."
-                      : "No rules yet. Add one to start."
+                    ? "Loading automations…"
+                    : "No automations yet. Add one, e.g. a birthday bonus or a follow-up when a membership is about to expire."
                 }
               />
             </div>
-            <p className="px-space-3 pt-space-3 text-[12.5px] text-ink-600">
-              Showing {rows.length ? `1–${rows.length}` : "0"} of {list.length}{" "}
-              rules
-            </p>
-            <p className="px-space-3 pb-space-3 text-[12px] text-ink-400">
-              {sub === "qualification"
-                ? "Qualification rules are applied automatically from loyalty points; editing one changes the real tier threshold."
-                : "Renewal and notification rules are saved settings: nothing is sent or changed automatically from them yet."}
+            <p className="px-space-3 py-space-3 text-[12px] text-ink-400">
+              Automations act on members only, once per customer per period,
+              when saved, daily, and after orders when set to real time.
             </p>
           </>
         )}
@@ -485,8 +537,8 @@ export function RulesView({
               Tier Qualification Summary
             </h3>
             <p className="text-[12.5px] text-ink-600">
-              Overview of how customers qualify for each membership tier and the
-              automation behaviour.
+              How customers qualify for each membership tier and the automation
+              behaviour.
             </p>
           </div>
         </div>
@@ -530,151 +582,100 @@ export function RulesView({
       />
 
       <Modal
-        open={editing !== null}
-        onClose={() => setEditing(null)}
-        title={
-          editingSystem
-            ? (editing as Rule).name
-            : editing === "new"
-              ? "Add rule"
-              : "Edit rule"
-        }
-        description={
-          editingSystem
-            ? "This changes the real threshold used to work out every customer's membership tier."
-            : "Saved as a setting; nothing is sent or changed automatically from it yet."
-        }
+        open={editingQual !== null}
+        onClose={() => setEditingQual(null)}
+        title={editingQual?.name ?? ""}
+        description="This changes the real settings used to work out every customer's membership tier."
         footer={
           <>
-            <Button variant="ghost" onClick={() => setEditing(null)}>
+            <Button variant="ghost" onClick={() => setEditingQual(null)}>
               Cancel
             </Button>
             <Button
-              disabled={
-                busy ||
-                (editingSystem
-                  ? value.trim() === ""
-                  : !form.name.trim() ||
-                    !form.trigger.trim() ||
-                    !form.action.trim())
-              }
-              onClick={save}
+              disabled={busy || qual.value.trim() === ""}
+              onClick={saveQual}
             >
               Save rule
             </Button>
           </>
         }
       >
-        {editingSystem ? (
-          <Field
-            label={
-              (editing as Rule).field === "inactive_after_days"
-                ? "Days without a purchase"
-                : "Loyalty points required"
+        <Field
+          label={
+            editingKey === "inactive"
+              ? "Days without a purchase"
+              : "Loyalty points required"
+          }
+          htmlFor="q_value"
+          required
+        >
+          <Input
+            id="q_value"
+            inputMode="numeric"
+            value={qual.value}
+            onChange={(e) =>
+              setQual({ ...qual, value: e.target.value.replace(/\D/g, "") })
             }
-            htmlFor="r_value"
-            required
-          >
-            <Input
-              id="r_value"
-              inputMode="numeric"
-              value={value}
-              onChange={(e) => setValue(e.target.value.replace(/\D/g, ""))}
-            />
-          </Field>
-        ) : (
-          <>
-            <div className="grid gap-space-3 sm:grid-cols-2">
-              <Field label="Rule type" htmlFor="r_kind">
-                <Select
-                  id="r_kind"
-                  value={form.kind}
-                  onValueChange={(v) =>
-                    setForm({ ...form, kind: v as Form["kind"] })
-                  }
-                >
-                  <option value="renewal">Renewal rule</option>
-                  <option value="notification">Notification</option>
-                </Select>
-              </Field>
-              <Field label="Applies to" htmlFor="r_applies">
-                <Select
-                  id="r_applies"
-                  value={form.applies}
-                  onValueChange={(v) => setForm({ ...form, applies: v })}
-                >
-                  {APPLIES.map((a) => (
-                    <option key={a} value={a}>
-                      {a}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-            <Field label="Rule name" htmlFor="r_name" required>
+          />
+        </Field>
+        {editingTier && (
+          <div className="grid gap-space-3 sm:grid-cols-2">
+            <Field
+              label={`Minimum spend since joining (${currency})`}
+              htmlFor="q_spend"
+              hint="Net of refunds. Empty = no minimum."
+            >
               <Input
-                id="r_name"
-                maxLength={80}
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                id="q_spend"
+                inputMode="decimal"
+                value={qual.spend}
+                onChange={(e) => setQual({ ...qual, spend: e.target.value })}
               />
             </Field>
-            <Field label="Trigger / condition" htmlFor="r_trigger" required>
+            <Field
+              label="Minimum orders"
+              htmlFor="q_orders"
+              hint="Empty = no minimum."
+            >
               <Input
-                id="r_trigger"
-                maxLength={160}
-                placeholder="e.g. Membership expires in 30 days"
-                value={form.trigger}
-                onChange={(e) => setForm({ ...form, trigger: e.target.value })}
+                id="q_orders"
+                inputMode="numeric"
+                value={qual.orders}
+                onChange={(e) =>
+                  setQual({
+                    ...qual,
+                    orders: e.target.value.replace(/\D/g, ""),
+                  })
+                }
               />
             </Field>
-            <Field label="Action" htmlFor="r_action" required>
-              <Input
-                id="r_action"
-                maxLength={160}
-                placeholder="e.g. Send expiry notification"
-                value={form.action}
-                onChange={(e) => setForm({ ...form, action: e.target.value })}
-              />
-            </Field>
-            <div className="grid gap-space-3 sm:grid-cols-2">
-              <Field label="Frequency" htmlFor="r_freq">
-                <Select
-                  id="r_freq"
-                  value={form.frequency}
-                  onValueChange={(v) =>
-                    setForm({ ...form, frequency: v as Frequency })
-                  }
-                >
-                  {(Object.keys(FREQUENCY_LABEL) as Frequency[]).map((f) => (
-                    <option key={f} value={f}>
-                      {FREQUENCY_LABEL[f]}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Status" htmlFor="r_status">
-                <Select
-                  id="r_status"
-                  value={form.status}
-                  onValueChange={(v) =>
-                    setForm({ ...form, status: v as Rule["status"] })
-                  }
-                >
-                  <option value="active">Active</option>
-                  <option value="draft">Draft</option>
-                  <option value="paused">Paused</option>
-                </Select>
-              </Field>
-            </div>
-          </>
+          </div>
+        )}
+        {editingTier && (
+          <p className="text-[12.5px] text-ink-600">
+            A customer needs all of these. Higher tiers can&apos;t ask for less
+            than lower ones.
+          </p>
         )}
       </Modal>
 
+      {automation !== null && (
+        <RuleModal
+          scope="membership"
+          rule={automation === "new" ? null : automation}
+          tags={[]}
+          onClose={() => setAutomation(null)}
+          onSaved={() => {
+            setAutomation(null);
+            reload();
+          }}
+        />
+      )}
+
       <ConfirmDialog
         open={removing !== null}
-        title="Delete this rule?"
-        message={`“${removing?.name ?? ""}” will be removed.`}
+        title="Delete this automation?"
+        message={`“${removing?.name ?? ""}” will stop running. Points already given stay.`}
         confirmLabel="Delete"
         destructive
         busy={busy}

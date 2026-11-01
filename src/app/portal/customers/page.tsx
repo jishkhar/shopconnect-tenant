@@ -12,13 +12,9 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { AnalyticsTab } from "@/components/crm/AnalyticsTab";
-import { CampaignsTab } from "@/components/crm/CampaignsTab";
 import { CommunicationTab } from "@/components/crm/CommunicationTab";
 import { CustomersTab } from "@/components/crm/CustomersTab";
-import { LoyaltyTab } from "@/components/crm/LoyaltyTab";
-import { MembershipTab } from "@/components/crm/membership/MembershipTab";
 import { KpiTile } from "@/components/crm/shared";
-import { TagsTab } from "@/components/crm/TagsTab";
 import { PortalShell } from "@/components/portal/PortalShell";
 import { usePortalGuard } from "@/components/portal/usePortalGuard";
 import { Button } from "@/components/ui/Button";
@@ -29,27 +25,18 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Tabs } from "@/components/ui/Tabs";
 import type { CrmSummary } from "@/lib/crm";
 import { erp, formatMoney, useErpQuery } from "@/lib/erp";
-import { hasPermission, hasTenantWide, useStaffSession } from "@/lib/staffAuth";
+import { hasPermission, useStaffSession } from "@/lib/staffAuth";
 import { toast } from "@/lib/toast";
 import { PhoneInput } from "@/components/ui/PhoneInput";
 import { phoneError, toE164 } from "@/lib/phone";
 
-type Tab =
-  | "customers"
-  | "segments"
-  | "tags"
-  | "campaigns"
-  | "communication"
-  | "loyalty"
-  | "analytics";
+/** Customers > All Customers. Membership, Tags and Campaigns are their own pages in the sidebar; this page keeps the customer list, the
+ * open follow-ups and the customer insights. */
+type Tab = "customers" | "follow-ups" | "insights";
 const TABS: { key: Tab; label: string }[] = [
-  { key: "customers", label: "All Customers" },
-  { key: "segments", label: "Membership" },
-  { key: "tags", label: "Tags" },
-  { key: "campaigns", label: "Campaigns" },
-  { key: "communication", label: "Communication" },
-  { key: "loyalty", label: "Loyalty" },
-  { key: "analytics", label: "Analytics" },
+  { key: "customers", label: "Customers" },
+  { key: "follow-ups", label: "Follow-ups" },
+  { key: "insights", label: "Insights" },
 ];
 
 export default function CustomersPage() {
@@ -64,7 +51,6 @@ export default function CustomersPage() {
   const [busy, setBusy] = useState(false);
   const [version, setVersion] = useState(0);
   const canCreate = hasPermission(session, "customers", "write");
-  const canConfigure = hasTenantWide(session, "customers:update");
   const currency = tenant?.currency ?? "INR";
   const s = summary.data;
 
@@ -99,7 +85,7 @@ export default function CustomersPage() {
     <PortalShell tenant={tenant} active="customers">
       <PageHeader
         icon={<HugeiconsIcon icon={UserGroupIcon} size={20} />}
-        title="Customer Management"
+        title="All Customers"
         description="Manage your customers, build relationships and increase repeat sales."
         actionsClassName="w-full justify-end md:w-auto"
         actions={
@@ -178,40 +164,15 @@ export default function CustomersPage() {
           onChanged={changed}
         />
       )}
-      {tab === "segments" && (
-        <MembershipTab
-          currency={currency}
-          canEdit={canCreate}
-          canConfigure={canConfigure}
-          onChanged={changed}
-        />
-      )}
-      {tab === "tags" && (
-        <TagsTab
-          onOpenTag={(t) => {
-            setFilter({ segment: "", tag: t });
-            setTab("customers");
-          }}
-        />
-      )}
-      {tab === "campaigns" && (
-        <CampaignsTab canEdit={canCreate} onChanged={changed} />
-      )}
-      {tab === "communication" && (
+      {tab === "follow-ups" && (
         <CommunicationTab
+          show="follow-ups"
           canEdit={canCreate}
           onChanged={changed}
           onOpenCustomer={openCustomer}
         />
       )}
-      {tab === "loyalty" && (
-        <LoyaltyTab
-          canConfigure={canConfigure}
-          onOpenCustomer={openCustomer}
-          onChanged={changed}
-        />
-      )}
-      {tab === "analytics" && (
+      {tab === "insights" && (
         <AnalyticsTab
           currency={currency}
           repeatRate={s?.repeat_rate_pct ?? 0}

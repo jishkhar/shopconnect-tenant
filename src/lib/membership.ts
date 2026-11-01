@@ -1,3 +1,4 @@
+import type { CrmRule } from "@/lib/rules";
 import {
   ChartBarLineIcon,
   CustomerSupportIcon,
@@ -186,38 +187,33 @@ export type BenefitsResponse = {
   }[];
 };
 
-export type RuleKind = "qualification" | "renewal" | "notification";
-export type Frequency = "real_time" | "daily" | "weekly" | "monthly" | "yearly";
-export const FREQUENCY_LABEL: Record<Frequency, string> = {
-  real_time: "Real-time",
-  daily: "Daily",
-  weekly: "Weekly",
-  monthly: "Monthly",
-  yearly: "Yearly",
-};
-export type Rule = {
+/** A built-in qualification rule (Membership > Rules): its thresholds are membership settings, read live. */
+export type QualificationRule = {
   id: string;
-  kind: RuleKind;
+  kind: "qualification";
   name: string;
   applies_to: string;
   trigger_text: string;
   action_text: string;
-  frequency: Frequency;
-  status: "active" | "draft" | "paused";
-  /** A built-in qualification rule: its threshold is a membership setting (`field`), not a saved record. */
-  system: boolean;
+  frequency: "real_time";
+  status: "active";
+  system: true;
+  /** The points (or days) setting an edit changes; null = nothing to configure. */
   field: string | null;
   value: number | null;
+  /** Tiers only: minimum spend since joining and minimum orders (0 = none). */
+  min_spend_minor: number | null;
+  min_orders: number | null;
 };
 export type RulesResponse = {
-  qualification: Rule[];
-  renewal: Rule[];
-  notification: Rule[];
+  qualification: QualificationRule[];
+  automations: CrmRule[];
   kpis: {
     total: number;
     active: number;
     automated_upgrades: number;
     expiring_30d: number;
+    automation_events_this_month: number;
   };
 };
 

@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   LogIn,
   Lock,
+  Megaphone,
   MessageCircle,
   MessageSquareText,
   Banknote,
@@ -61,6 +62,8 @@ type NavItem = {
   disabled?: boolean;
   /** The service this item is the page of; it shows a lock while that service does not work. */
   service?: Service;
+  /** Pages under this one, shown beneath it while it or one of them is open (their keys start with this item's key). */
+  children?: { key: string; label: string; href: string }[];
 };
 
 type IconProps = { size?: number; strokeWidth?: number; className?: string };
@@ -126,6 +129,20 @@ const NAV_ITEMS: NavItem[] = [
     href: "/portal/customers",
     pageKey: "customers",
     group: "Main",
+    children: [
+      { key: "customers", label: "All Customers", href: "/portal/customers" },
+      {
+        key: "customers-membership",
+        label: "Membership",
+        href: "/portal/customers/membership",
+      },
+      { key: "customers-tags", label: "Tags", href: "/portal/customers/tags" },
+      {
+        key: "customers-segments",
+        label: "Segments",
+        href: "/portal/customers/segments",
+      },
+    ],
   },
   {
     key: "whatsapp-inbox",
@@ -149,6 +166,14 @@ const NAV_ITEMS: NavItem[] = [
     icon: Tag,
     href: "/portal/discounts",
     pageKey: "discounts",
+    group: "Main",
+  },
+  {
+    key: "campaigns",
+    label: "Campaigns",
+    icon: Megaphone,
+    href: "/portal/campaigns",
+    pageKey: "customers",
     group: "Main",
   },
   {
@@ -402,8 +427,17 @@ export function PortalSidebar({
           aria-label="Main navigation"
         >
           {visible.map((item, index) => {
-            const { key, label, icon: Icon, href, group, disabled } = item;
-            const isActive = key === active;
+            const {
+              key,
+              label,
+              icon: Icon,
+              href,
+              group,
+              disabled,
+              children,
+            } = item;
+            const inGroup = !!children?.some((c) => c.key === active);
+            const isActive = key === active || inGroup;
             const startsGroup =
               index === 0 || visible[index - 1].group !== group;
             return (
@@ -454,6 +488,26 @@ export function PortalSidebar({
                         />
                       )}
                   </Link>
+                )}
+                {children && isActive && (
+                  <div className="ml-[22px] mt-1 mb-space-1 space-y-0.5 border-l border-white/15 pl-space-2">
+                    {children.map((c) => (
+                      <Link
+                        key={c.key}
+                        href={c.href}
+                        onClick={onClose}
+                        aria-current={c.key === active ? "page" : undefined}
+                        className={cn(
+                          "block rounded-md px-space-3 py-2 text-[13.5px] transition-colors duration-150",
+                          c.key === active
+                            ? "bg-white/15 font-semibold text-white"
+                            : "font-medium text-white/75 hover:bg-white/10 hover:text-white",
+                        )}
+                      >
+                        {c.label}
+                      </Link>
+                    ))}
+                  </div>
                 )}
               </div>
             );

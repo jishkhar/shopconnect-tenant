@@ -141,6 +141,8 @@ export type CampaignType =
   "discount" | "loyalty" | "message" | "launch" | "event";
 export type CampaignAudience = {
   segment?: Segment;
+  /** A saved segment (Customers > Segments). */
+  segment_id?: string;
   tag?: string;
   customer_id?: string;
   customer_type?: "individual" | "business";

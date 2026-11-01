@@ -54,6 +54,8 @@ import {
 } from "@/hooks/useWhatsApp";
 import { discountOffer, discountSummary } from "@/lib/discountSummary";
 import { erp, toMinor, useErpQuery, type Discount } from "@/lib/erp";
+import type { SavedSegment } from "@/lib/rules";
+import { hasGrant, useStaffSession } from "@/lib/staffAuth";
 import { toast } from "@/lib/toast";
 
 const MESSAGING: CampaignChannel[] = ["whatsapp", "email", "sms"];
@@ -148,6 +150,7 @@ type Form = {
   /** Set when an older campaign goes to one chosen customer: the filters below don't apply to it. */
   customerId: string;
   segment: string;
+  segmentId: string;
   tag: string;
   customerType: string;
   onlyNew: boolean;
@@ -177,6 +180,7 @@ const EMPTY: Form = {
   type: "discount",
   customerId: "",
   segment: "",
+  segmentId: "",
   tag: "",
   customerType: "",
   onlyNew: false,
@@ -215,6 +219,7 @@ const audienceOf = (f: Form): CampaignAudience =>
     ? { customer_id: f.customerId }
     : {
         ...(f.segment ? { segment: f.segment as Segment } : {}),
+        ...(f.segmentId ? { segment_id: f.segmentId } : {}),
         ...(f.tag ? { tag: f.tag } : {}),
         ...(f.customerType
           ? { customer_type: f.customerType as "individual" | "business" }
@@ -238,6 +243,7 @@ function audienceLabel(a: Campaign["audience"]) {
   if (a.customer_id) return "Individual customer";
   const parts = [
     a.segment ? SEGMENT_META[a.segment].label : null,
+    a.segment_id ? "saved segment" : null,
     a.tag ? `tag: ${a.tag}` : null,
     a.customer_type ? `${a.customer_type} customers` : null,
     a.city ?? null,
@@ -260,9 +266,14 @@ export function CampaignsTab({
   onChanged: () => void;
 }) {
   const campaigns = useErpQuery<Campaign[]>("/api/v1/crm/campaigns");
+  // Sending reaches real customers: its own permission (drafting needs customers write).
+  const canSend = hasGrant(useStaffSession(), "customers:send_campaigns");
   const tags =
     useErpQuery<{ tag: string; customers: number }[]>("/api/v1/crm/tags");
   const discounts = useErpQuery<Discount[]>("/api/v1/discounts");
+  const savedSegments = useErpQuery<SavedSegment[]>(
+    "/api/v1/crm/customer-segments",
+  );
   const options = useErpQuery<{ cities: string[] }>(
     "/api/v1/crm/audience-options",
   );
@@ -337,6 +348,7 @@ export function CampaignsTab({
       type: k.campaign_type,
       customerId: a.customer_id ?? "",
       segment: a.segment ?? "",
+      segmentId: a.segment_id ?? "",
       tag: a.tag ?? "",
       customerType: a.customer_type ?? "",
       onlyNew: a.only_new ?? false,
@@ -634,7 +646,9 @@ export function CampaignsTab({
                   <Button variant="ghost" onClick={() => openEdit(k)}>
                     Edit
                   </Button>
-                  <Button onClick={() => setSending(k)}>Send</Button>
+                  {canSend && (
+                    <Button onClick={() => setSending(k)}>Send</Button>
+                  )}
                   <Button variant="ghost" onClick={() => setDeleting(k)}>
                     Delete
                   </Button>
@@ -645,7 +659,7 @@ export function CampaignsTab({
         },
       },
     ],
-    [canEdit],
+    [canEdit, canSend],
   );
 
   return (
@@ -705,7 +719,15 @@ export function CampaignsTab({
             >
               Save as draft
             </Button>
-            <Button disabled={busy || !form.name.trim()} onClick={launch}>
+            <Button
+              disabled={busy || !form.name.trim() || !canSend}
+              title={
+                canSend
+                  ? undefined
+                  : "Your role can save drafts but not send campaigns."
+              }
+              onClick={launch}
+            >
               Launch campaign
             </Button>
           </>
@@ -796,7 +818,27 @@ export function CampaignsTab({
                       ))}
                     </Select>
                   </Field>
-                  <Field label="Customer tags / segment" htmlFor="k_tag">
+                  <Field label="Saved segment" htmlFor="k_saved">
+                    <Select
+                      id="k_saved"
+                      value={form.segmentId}
+                      onValueChange={(v) => setForm({ ...form, segmentId: v })}
+                    >
+                      <option value="">None</option>
+                      {(savedSegments.data ?? []).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.member_count.toLocaleString("en-IN")})
+                        </option>
+                      ))}
+                    </Select>
+                    <Link
+                      href="/portal/customers/segments"
+                      className="mt-space-1 inline-block text-[12.5px] font-semibold text-brand-700"
+                    >
+                      + New segment
+                    </Link>
+                  </Field>
+                  <Field label="Customer tag" htmlFor="k_tag">
                     <Select
                       id="k_tag"
                       value={form.tag}
@@ -810,7 +852,7 @@ export function CampaignsTab({
                       ))}
                     </Select>
                     <Link
-                      href="/portal/customers"
+                      href="/portal/customers/tags"
                       className="mt-space-1 inline-block text-[12.5px] font-semibold text-brand-700"
                     >
                       + Add new tag

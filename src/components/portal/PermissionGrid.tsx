@@ -15,6 +15,7 @@ const COLUMNS: { key: Column; label: string }[] = [
 // What each extra action is called in the editor; anything not listed shows its action name.
 export const PERMISSION_LABEL: Record<string, string> = {
   "orders:create_any_channel": "Create orders for any channel",
+  "customers:send_campaigns": "Send campaigns to customers",
   "orders:discount": "Give discounts on orders",
   "orders:return": "Take returns",
   "orders:cancel": "Cancel orders",

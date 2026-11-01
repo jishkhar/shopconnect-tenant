@@ -20,16 +20,19 @@ export function ViewHeader({
   title,
   description,
   action,
+  icon,
 }: {
   title: string;
   description: string;
   action?: React.ReactNode;
+  /** Defaults to the crown. */
+  icon?: React.ReactNode;
 }) {
   return (
     <div className="mb-space-3 flex flex-wrap items-center justify-between gap-space-3">
       <div className="flex min-w-0 items-center gap-space-3">
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-          <HugeiconsIcon icon={CrownIcon} size={22} />
+          {icon ?? <HugeiconsIcon icon={CrownIcon} size={22} />}
         </span>
         <div className="min-w-0">
           <h2 className="text-[19px] font-bold leading-tight text-ink-900">
